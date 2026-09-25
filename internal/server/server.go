@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/google/ax/internal/model"
 	"github.com/google/ax/internal/store"
 	"github.com/google/ax/pkg/apis/v1alpha1"
 	"google.golang.org/grpc"
@@ -336,6 +337,10 @@ func (s *Server) ListModels(ctx context.Context, req *v1alpha1.ListModelsRequest
 func (s *Server) UpdateModel(ctx context.Context, req *v1alpha1.UpdateModelRequest) (*v1alpha1.Model, error) {
 	if req == nil || req.Model == nil {
 		return nil, status.Error(codes.InvalidArgument, "model required")
+	}
+	provider := req.Model.GetSpec().GetProvider()
+	if normalized := strings.ToLower(provider); normalized != "" && normalized != model.ProviderGoogle {
+		return nil, status.Errorf(codes.InvalidArgument, "spec.provider %q is unsupported; supported providers: %q", provider, model.ProviderGoogle)
 	}
 	req.Model.Metadata = defaultMetadata(req.Model.Metadata, func(atespace, name string) *v1alpha1.ObjectMeta {
 		existing, err := s.store.GetModel(ctx, atespace, name)

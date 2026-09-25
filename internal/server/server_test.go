@@ -252,6 +252,38 @@ func TestServerGRPC(t *testing.T) {
 	}
 }
 
+func TestUpdateModel_ValidatesProvider(t *testing.T) {
+	tests := []struct {
+		name     string
+		provider string
+		wantCode codes.Code
+	}{
+		{name: "google", provider: "google", wantCode: codes.OK},
+		{name: "case insensitive", provider: "Google", wantCode: codes.OK},
+		{name: "empty defaults to google", provider: "", wantCode: codes.OK},
+		{name: "unsupported", provider: "anthropic", wantCode: codes.InvalidArgument},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := server.NewServer(memory.NewStore())
+			_, err := srv.UpdateModel(context.Background(), &v1alpha1.UpdateModelRequest{Model: &v1alpha1.Model{
+				Metadata: &v1alpha1.ObjectMeta{Name: "test-model"},
+				Spec:     &v1alpha1.ModelSpec{Provider: tt.provider},
+			}})
+			if got := status.Code(err); got != tt.wantCode {
+				t.Fatalf("UpdateModel returned code %s, want %s: %v", got, tt.wantCode, err)
+			}
+			if tt.wantCode == codes.InvalidArgument {
+				_, err = srv.GetModel(context.Background(), &v1alpha1.GetModelRequest{Name: "test-model"})
+				if got := status.Code(err); got != codes.NotFound {
+					t.Fatalf("rejected model was persisted: GetModel returned code %s", got)
+				}
+			}
+		})
+	}
+}
+
 func TestUpdateTask_ValidatesWorkspaceBindings(t *testing.T) {
 	srv := server.NewServer(memory.NewStore())
 	ctx := context.Background()
