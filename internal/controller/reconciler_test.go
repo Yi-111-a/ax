@@ -18,6 +18,8 @@ import (
 	"context"
 	"net"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -341,7 +343,30 @@ func TestTaskReconciler_WorkspaceReady(t *testing.T) {
 	assertCondition(t, reconciled, "WorkspaceReady", "False", "Initializing")
 	assertCondition(t, reconciled, "Ready", "False", "WorkspaceInitializing")
 
-	// Case 2: Worker readyz endpoint succeeds -> WorkspaceReady=True and Ready=True.
+	// Case 2: A worker address is not directly reachable, so readiness goes through
+	// atenet-router with the actor DNS authority and explicit target header.
+	router := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got, want := r.Host, "ready-task.default.actors.resources.substrate.ate.dev"; got != want {
+			http.Error(w, "unexpected host "+got, http.StatusNotFound)
+			return
+		}
+		if got, want := r.Header.Get("ate-target-actor"), "default/ready-task"; got != want {
+			http.Error(w, "unexpected target "+got, http.StatusNotFound)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer router.Close()
+	t.Setenv("ATENET_ROUTER_ADDR", strings.TrimPrefix(router.URL, "http://"))
+	mockSrv.workerIP = "127.0.0.1:1"
+	reconciledViaRouter, err := reconciler.Reconcile(ctx, task, nil)
+	if err != nil {
+		t.Fatalf("Reconcile through atenet-router failed: %v", err)
+	}
+	assertCondition(t, reconciledViaRouter, "WorkspaceReady", "True", "SetupComplete")
+	assertCondition(t, reconciledViaRouter, "Ready", "True", "TaskRunning")
+
+	// Case 3: Worker readyz endpoint succeeds directly -> WorkspaceReady=True and Ready=True.
 	mockSrv.workerIP = httpLis.Addr().String()
 	reconciledReady, err := reconciler.Reconcile(ctx, task, nil)
 	if err != nil {
@@ -350,7 +375,7 @@ func TestTaskReconciler_WorkspaceReady(t *testing.T) {
 	assertCondition(t, reconciledReady, "WorkspaceReady", "True", "SetupComplete")
 	assertCondition(t, reconciledReady, "Ready", "True", "TaskRunning")
 
-	// Case 3: Suspending the task -> Ready=False (TaskSuspended), but the workspace was
+	// Case 4: Suspending the task -> Ready=False (TaskSuspended), but the workspace was
 	// already initialized so WorkspaceReady stays True.
 	task = reconciledReady
 	task.Status.Phase = "Suspended"

@@ -249,6 +249,7 @@ func (r *TaskReconciler) Reconcile(ctx context.Context, task *v1alpha1.Task, wor
 				rReq, _ := http.NewRequestWithContext(pollCtx, http.MethodGet, fmt.Sprintf("http://%s/readyz?check=workspace", routerAddr), nil)
 				if rReq != nil {
 					rReq.Header.Set("ate-target-actor", fmt.Sprintf("%s/%s", atespace, actorName))
+					rReq.Host = fmt.Sprintf("%s.%s.actors.resources.substrate.ate.dev", actorName, atespace)
 					if resp, err := r.httpClient.Do(rReq); err == nil {
 						_ = resp.Body.Close()
 						if resp.StatusCode == http.StatusOK {
