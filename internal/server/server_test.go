@@ -503,3 +503,47 @@ func TestServer_DeleteTask_UpdateStatusError(t *testing.T) {
 		t.Errorf("expected ReconcileDelete not to be called if UpdateTaskStatus fails, got %d calls", rec.deleteCount)
 	}
 }
+
+// A watch on a task that does not exist can never receive an update, so the
+// server reports NotFound up front instead of holding the stream open forever.
+func TestServer_WatchTask_MissingTaskReturnsNotFound(t *testing.T) {
+	srv := server.NewServer(memory.NewStore())
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to listen: %v", err)
+	}
+	defer ln.Close()
+
+	httpServer := &http.Server{Handler: srv.Handler()}
+	httpServer.Protocols = new(http.Protocols)
+	httpServer.Protocols.SetHTTP1(true)
+	httpServer.Protocols.SetUnencryptedHTTP2(true)
+
+	go func() {
+		_ = httpServer.Serve(ln)
+	}()
+	defer httpServer.Close()
+
+	conn, err := grpc.NewClient(ln.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("failed to dial gRPC: %v", err)
+	}
+	defer conn.Close()
+
+	client := v1alpha1.NewAXClient(conn)
+	// Short deadline: on main the stream never sends anything for a missing
+	// task, so the assertion below only ever sees DeadlineExceeded.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	stream, err := client.WatchTask(ctx, &v1alpha1.WatchTaskRequest{Atespace: "default", Name: "does-not-exist"})
+	if err != nil {
+		t.Fatalf("WatchTask: %v", err)
+	}
+
+	_, err = stream.Recv()
+	if got := status.Code(err); got != codes.NotFound {
+		t.Fatalf("WatchTask on a missing task: got %v, want NotFound", err)
+	}
+}

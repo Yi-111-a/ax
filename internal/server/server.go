@@ -377,16 +377,25 @@ func (s *Server) WatchTask(req *v1alpha1.WatchTaskRequest, stream grpc.ServerStr
 		atespace = "default"
 	}
 	ctx := stream.Context()
+	// Resolve the task before subscribing. A watch on a name that does not
+	// exist would otherwise never see an update, so the stream would stay open
+	// forever instead of reporting the same NotFound GetTask returns.
+	initial, err := s.store.GetTask(ctx, atespace, req.Name)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return status.Errorf(codes.NotFound, "task %q not found in atespace %q", req.Name, atespace)
+		}
+		return status.Errorf(codes.Internal, "getting task: %v", err)
+	}
+
 	ch, closer, err := s.store.WatchTask(ctx, atespace, req.Name)
 	if err != nil {
 		return status.Errorf(codes.Internal, "watching task: %v", err)
 	}
 	defer closer.Close()
 
-	if initial, err := s.store.GetTask(ctx, atespace, req.Name); err == nil {
-		if err := stream.Send(&v1alpha1.WatchTaskResponse{Task: initial, Action: "INITIAL"}); err != nil {
-			return err
-		}
+	if err := stream.Send(&v1alpha1.WatchTaskResponse{Task: initial, Action: "INITIAL"}); err != nil {
+		return err
 	}
 
 	for {
